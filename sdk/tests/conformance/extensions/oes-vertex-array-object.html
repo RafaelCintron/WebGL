@@ -564,9 +564,13 @@ function runUnboundDeleteTests() {
             testFailed("buffer not properly cleaned up after VAO deletion");
         }
     }
+
+    // Clear out state for the next test
+    ext.bindVertexArrayOES(null);
 }
 
 function runBoundDeleteTests() {
+    debug("");
     debug("Testing using buffers that are deleted when attached to bound VAOs");
 
     var program = wtu.setupProgram(gl, ["vshader", "fshader"], ["a_position", "a_color"]);
@@ -621,37 +625,39 @@ function runBoundDeleteTests() {
     for (var ii = 0; ii < vaos.length; ++ii) {
         ext.bindVertexArrayOES(vaos[ii]);
 
-        gl.deleteBuffer(colorBuffer);
+        // Per the extension spec, browsers must keep a reference count on all buffers. isBuffer
+        // should only return false when the buffer has been detached from all vertex arrays, including
+        // the default vertex array.
+        // Since colorBuffer and positionBuffer are attached in our vertex array objects, calling
+        // deleteBuffer should clear out the attachments and fail rendering.
         gl.deleteBuffer(positionBuffer);
-
-        // After the first iteration, deleteBuffer will be a no-op, and will not unbind its matching
-        // bind points on the now-bound VAO like it did on the first iteration.
-        var expectRetained = (ii != 0);
-        var shouldBeStr = (expectRetained ? "retained" : "cleared");
-
         var boundPositionBuffer = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING);
-        if (expectRetained != (boundPositionBuffer == positionBuffer)) {
-            testFailed("Position attrib stored buffer should be " + shouldBeStr + ".");
-        }
+        assertMsg(boundPositionBuffer === null, "deleting positionBuffer should detach it from vertex array object");
 
+        gl.deleteBuffer(colorBuffer);
         var boundColorBuffer = gl.getVertexAttrib(1, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING);
-        if (expectRetained != (boundColorBuffer == colorBuffer)) {
-            testFailed("Color attrib stored buffer should be " + shouldBeStr + ".");
-        }
+        assertMsg(boundColorBuffer === null, "deleting colorBuffer should detach it from vertex array object");
 
-        // If retained, everything should still work. If cleared, drawing should now fail.
         gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_BYTE, 0);
-        var expectedError = (expectRetained ? gl.NO_ERROR : gl.INVALID_OPERATION);
-        wtu.glErrorShouldBe(gl, expectedError,
-                            "Draw call should " + (expectRetained ? "not " : "") + "fail.");
+        wtu.glErrorShouldBe(gl, gl.INVALID_OPERATION, "Draw call should fail; buffer has been detached");
 
-        if (!gl.isBuffer(positionBuffer)) {
-            testFailed("References from unbound VAOs keep Position buffer alive.");
-        }
-        if (!gl.isBuffer(colorBuffer)) {
-            testFailed("References from unbound VAOs keep Color buffer alive");
+        // Note above that the colorBufer is still attached to the default vertex array object. Hence, it should
+        // always return true for isBuffer so long as the default vertex array object is keeping it alive.
+        assertMsg(gl.isBuffer(colorBuffer),
+            "isBuffer(colorBuffer) should return true since the reference on the default vertex array object is keeping it alive.");
+
+        // Since the position buffer is only kept alive by the non-default vertex array objects, it becomes
+        // deleted when it gets removed from the last vertex array object
+        if (ii === (vaos.length - 1)) {
+            assertMsg(!gl.isBuffer(positionBuffer), "Last reference to positionBuffer should delete it.");
+        } else {
+            assertMsg(gl.isBuffer(positionBuffer), "Outstanding references to positionBuffer remain.");
         }
     }
+
+    ext.bindVertexArrayOES(null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    assertMsg(!gl.isBuffer(colorBuffer), "Last reference to colorBuffer has been detached. Is is considered deleted.");
 }
 
 function runArrayBufferBindTests() {
